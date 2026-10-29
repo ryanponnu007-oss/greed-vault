@@ -512,7 +512,14 @@ function showScreen(id) {
     if (el) el.classList.add('hidden');
   });
   const target = document.getElementById(id);
-  if (target) target.classList.remove('hidden');
+  if (target) {
+    target.classList.remove('hidden');
+    if (id === 'screen-game') {
+      document.body.classList.add('in-game');
+    } else {
+      document.body.classList.remove('in-game');
+    }
+  }
 }
 
 // UI Handlers
