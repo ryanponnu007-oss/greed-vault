@@ -3,518 +3,642 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 
+const fs = require('fs');
+
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' }
-});
+const io = new Server(server, { cors: { origin: '*' } });
 
 const PORT = process.env.PORT || 3000;
 
+// Serve from both 'public' subfolder and root directory (for 100% deployment compatibility)
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(__dirname));
 
-// Fallback to index.html for client-side routing
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  const publicPath = path.join(__dirname, 'public', 'index.html');
+  if (fs.existsSync(publicPath)) {
+    return res.sendFile(publicPath);
+  }
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Loot items catalog
-const LOOT_CATALOG = [
-  { name: 'Royal Diamond Crown', icon: '👑', desc: 'Stolen from the high palace vault.' },
-  { name: 'Glowing Alien Core', icon: '👽', desc: 'Unstable extraterrestrial power source.' },
-  { name: 'Cursed Golden Skull', icon: '💀', desc: 'Whispers dark secrets of ancient wealth.' },
-  { name: 'Cyber Data Shard', icon: '💾', desc: 'Contains billions in encrypted cryptocurrency.' },
-  { name: 'Quantum Plasma Orb', icon: '⚡', desc: 'Fluctuates between dimensions rapidly.' },
-  { name: 'Ruby Dragon Eye', icon: '👁️', desc: 'Glows hotter the longer you hold it.' }
+const MAP_W = 900;
+const MAP_H = 600;
+
+const PILLARS = [
+  { x: 180, y: 160, w: 70, h: 70 },
+  { x: 650, y: 160, w: 70, h: 70 },
+  { x: 180, y: 370, w: 70, h: 70 },
+  { x: 650, y: 370, w: 70, h: 70 },
+  { x: 415, y: 265, w: 70, h: 70 }
 ];
 
-const AVATARS = ['🦊', '🐱', '🐺', '🐼', '🐵', '🐸', '🦁', '🐯', '🤖', '🦝'];
+const ESCAPE_ZONE = { x: 350, y: 10, w: 200, h: 55 };
+const SPAWN_ZONE = { x: 420, y: 530 };
 
-// Rooms memory store
+const POWERUPS = ['banana', 'rocket', 'magnet', 'smoke'];
+
+function createLoots() {
+  return [
+    { id: 1, type: 'diamond', name: 'Master Diamond', icon: '💎', x: 450, y: 365, value: 1000, carriedBy: null, respawnAt: 0 },
+    { id: 2, type: 'gold', name: 'Gold Ingot', icon: '🪙', x: 140, y: 120, value: 300, carriedBy: null, respawnAt: 0 },
+    { id: 3, type: 'gold', name: 'Gold Ingot', icon: '🪙', x: 760, y: 120, value: 300, carriedBy: null, respawnAt: 0 },
+    { id: 4, type: 'gold', name: 'Gold Ingot', icon: '🪙', x: 140, y: 460, value: 300, carriedBy: null, respawnAt: 0 },
+    { id: 5, type: 'gold', name: 'Gold Ingot', icon: '🪙', x: 760, y: 460, value: 300, carriedBy: null, respawnAt: 0 }
+  ];
+}
+
+function createItemBoxes() {
+  return [
+    { id: 1, x: 300, y: 230, respawnAt: 0 },
+    { id: 2, x: 600, y: 230, respawnAt: 0 },
+    { id: 3, x: 450, y: 160, respawnAt: 0 },
+    { id: 4, x: 450, y: 470, respawnAt: 0 }
+  ];
+}
+
+function createGuards() {
+  return [
+    {
+      id: 1,
+      x: 200,
+      y: 100,
+      patrol: [{ x: 200, y: 100 }, { x: 700, y: 100 }],
+      targetIdx: 1,
+      angle: 0,
+      speed: 2.2,
+      state: 'patrol',
+      chaseTargetId: null,
+      visionDist: 175,
+      visionFov: Math.PI / 3,
+      blindedUntil: 0
+    },
+    {
+      id: 2,
+      x: 700,
+      y: 470,
+      patrol: [{ x: 700, y: 470 }, { x: 200, y: 470 }],
+      targetIdx: 1,
+      angle: Math.PI,
+      speed: 2.2,
+      state: 'patrol',
+      chaseTargetId: null,
+      visionDist: 175,
+      visionFov: Math.PI / 3,
+      blindedUntil: 0
+    }
+  ];
+}
+
 const rooms = new Map();
 
 function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   let code = '';
-  for (let i = 0; i < 4; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
+  for (let i = 0; i < 4; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
   return rooms.has(code) ? generateRoomCode() : code;
 }
 
-function broadcastRoom(room) {
-  const safeData = {
-    code: room.code,
-    gameState: room.gameState,
-    currentRound: room.currentRound,
-    maxRounds: room.maxRounds,
-    hostId: room.hostId,
-    loot: room.loot,
-    currentHolderId: room.currentHolderId,
-    currentValue: room.currentValue,
-    dangerLevel: room.dangerLevel,
-    players: room.players.map(p => ({
-      id: p.id,
-      name: p.name,
-      avatar: p.avatar,
-      score: p.score,
-      roundScore: p.roundScore,
-      status: p.status, // 'holding', 'safe', 'busted', 'spectating'
-      isHost: p.id === room.hostId
-    })),
-    lastEvent: room.lastEvent
-  };
-  io.to(room.code).emit('room_update', safeData);
+function collidesWithPillars(x, y, radius = 16) {
+  for (const p of PILLARS) {
+    if (x + radius > p.x && x - radius < p.x + p.w &&
+        y + radius > p.y && y - radius < p.y + p.h) {
+      return true;
+    }
+  }
+  return false;
 }
 
-function startRound(room) {
-  room.gameState = 'active';
-  room.loot = LOOT_CATALOG[Math.floor(Math.random() * LOOT_CATALOG.length)];
-  room.currentValue = 100;
-  room.dangerLevel = 5;
-  room.elapsedSeconds = 0;
-  room.lastEvent = { type: 'ROUND_START', text: `Round ${room.currentRound}: The ${room.loot.name} is up for grabs!` };
+function hasLineOfSight(x1, y1, x2, y2) {
+  const steps = 10;
+  for (let i = 1; i < steps; i++) {
+    const rx = x1 + (x2 - x1) * (i / steps);
+    const ry = y1 + (y2 - y1) * (i / steps);
+    if (collidesWithPillars(rx, ry, 6)) return false;
+  }
+  return true;
+}
 
-  // Reset round statuses
-  room.players.forEach(p => {
-    p.status = 'spectating';
-    p.roundScore = 0;
-  });
+function updateGame(room) {
+  if (room.gameState !== 'active') return;
 
-  // Pick first holder randomly
-  const initialHolder = room.players[Math.floor(Math.random() * room.players.length)];
-  room.currentHolderId = initialHolder.id;
-  initialHolder.status = 'holding';
+  const now = Date.now();
 
-  // Secret fuse time between 14 and 26 seconds total
-  room.secretAlarmLimit = 14 + Math.random() * 12;
+  // 1. Clean expired smoke
+  room.smokes = room.smokes.filter(s => now < s.expiresAt);
 
-  broadcastRoom(room);
+  // 1b. Sudden Death: Final 30s Mega Emerald ($2,500) Spawn!
+  const timeLeft = Math.max(0, Math.ceil((room.endTime - now) / 1000));
+  if (timeLeft <= 30 && !room.megaLootSpawned) {
+    room.megaLootSpawned = true;
+    room.loots.push({
+      id: 99,
+      type: 'emerald',
+      name: 'MEGA EMERALD',
+      icon: '❇️',
+      x: 450,
+      y: 365,
+      value: 2500,
+      carriedBy: null,
+      respawnAt: 0
+    });
+    io.to(room.code).emit('sound', 'siren');
+    io.to(room.code).emit('event_msg', {
+      text: '👑 SUDDEN DEATH (FINAL 30S)! MEGA EMERALD ($2,500) DROPPED IN THE VAULT!'
+    });
+  }
 
-  // Clear any existing timer
-  if (room.timer) clearInterval(room.timer);
-
-  // 100ms game tick loop
-  room.timer = setInterval(() => {
-    if (room.gameState !== 'active') {
-      clearInterval(room.timer);
-      return;
+  // 2. Guard AI
+  for (const guard of room.guards) {
+    // Check if guard is inside a smoke cloud
+    let inSmoke = false;
+    for (const sm of room.smokes) {
+      if (Math.hypot(guard.x - sm.x, guard.y - sm.y) < sm.radius) {
+        inSmoke = true;
+        guard.blindedUntil = Math.max(guard.blindedUntil, now + 1500);
+        break;
+      }
     }
 
-    room.elapsedSeconds += 0.1;
-
-    // Exponential value growth formula: starts at $100, accelerates thrillingly
-    room.currentValue = Math.floor(100 * Math.pow(1.15, room.elapsedSeconds * 2.2));
-
-    // Danger calculation: percentage towards secretAlarmLimit
-    const ratio = room.elapsedSeconds / room.secretAlarmLimit;
-    room.dangerLevel = Math.min(100, Math.floor(ratio * 100));
-
-    // Check if alarm triggered (LOCKDOWN / BUST)
-    if (room.elapsedSeconds >= room.secretAlarmLimit) {
-      triggerBust(room);
-      return;
+    if (now < guard.blindedUntil) {
+      guard.state = 'blinded';
+      guard.angle += 0.05; // Spin around confused
+      continue;
     }
 
-    // Bot AI decision making
-    if (room.currentHolderId && room.currentHolderId.startsWith('bot_')) {
-      const bot = room.players.find(p => p.id === room.currentHolderId);
-      if (bot && (room.dangerLevel > 40 || room.currentValue > 1200) && Math.random() < 0.12) {
-        if (Math.random() < 0.55) {
-          // Bot passes loot to another player
-          const targets = room.players.filter(p => p.id !== bot.id && p.status !== 'safe');
-          if (targets.length > 0) {
-            const target = targets[Math.floor(Math.random() * targets.length)];
-            bot.status = 'spectating';
-            bot.score += 150;
-            target.status = 'holding';
-            room.currentHolderId = target.id;
-            room.lastEvent = { type: 'PASS', text: `💣 ${bot.name} flung the loot to ${target.name}!` };
-            io.to(room.code).emit('sound_effect', { type: 'whoosh' });
-            broadcastRoom(room);
-          }
-        } else {
-          // Bot cashes out safely
-          const banked = room.currentValue;
-          bot.score += banked;
-          bot.roundScore = banked;
-          bot.status = 'safe';
-          room.lastEvent = { type: 'CASH_OUT', text: `💰 ${bot.name} CASHED OUT with $${banked.toLocaleString()}!` };
-          io.to(room.code).emit('sound_effect', { type: 'cash_out', player: bot.name, amount: banked });
-          
-          const remaining = room.players.filter(p => p.status === 'spectating');
-          if (remaining.length === 0) {
-            clearInterval(room.timer);
-            room.gameState = 'safe_end';
-            broadcastRoom(room);
-            setTimeout(() => endRound(room), 2500);
-          } else {
-            const nextHolder = remaining[Math.floor(Math.random() * remaining.length)];
-            room.currentHolderId = nextHolder.id;
-            nextHolder.status = 'holding';
-            room.secretAlarmLimit += 4;
-            broadcastRoom(room);
+    let targetX, targetY;
+    let spottedPlayer = null;
+
+    for (const player of room.players) {
+      if (player.isBusted || player.isStunned) continue;
+
+      const dx = player.x - guard.x;
+      const dy = player.y - guard.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist <= guard.visionDist) {
+        let angleToPlayer = Math.atan2(dy, dx);
+        let diff = Math.abs(guard.angle - angleToPlayer);
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        diff = Math.abs(diff);
+
+        if (diff <= guard.visionFov / 2) {
+          if (hasLineOfSight(guard.x, guard.y, player.x, player.y)) {
+            if (!spottedPlayer || player.hasLoot) {
+              spottedPlayer = player;
+              if (player.hasLoot) break;
+            }
           }
         }
       }
     }
 
-    // Broadcast tick updates efficiently
-    io.to(room.code).emit('tick_update', {
-      currentValue: room.currentValue,
-      dangerLevel: room.dangerLevel,
-      currentHolderId: room.currentHolderId
-    });
-  }, 100);
-}
+    if (spottedPlayer) {
+      guard.state = 'chase';
+      guard.chaseTargetId = spottedPlayer.id;
+      guard.speed = 3.2;
+      targetX = spottedPlayer.x;
+      targetY = spottedPlayer.y;
 
-function triggerBust(room) {
-  clearInterval(room.timer);
-  room.gameState = 'busted';
+      if (now - room.lastSirenTime > 3000) {
+        room.lastSirenTime = now;
+        io.to(room.code).emit('sound', 'siren');
+      }
+    } else {
+      guard.state = 'patrol';
+      guard.speed = 2.0;
+      const currentPatrol = guard.patrol[guard.targetIdx];
+      targetX = currentPatrol.x;
+      targetY = currentPatrol.y;
 
-  const victim = room.players.find(p => p.id === room.currentHolderId);
-  if (victim) {
-    victim.status = 'busted';
-    victim.roundScore = 0;
+      const distToPatrol = Math.hypot(targetX - guard.x, targetY - guard.y);
+      if (distToPatrol < 10) {
+        guard.targetIdx = (guard.targetIdx + 1) % guard.patrol.length;
+      }
+    }
+
+    const gdx = targetX - guard.x;
+    const gdy = targetY - guard.y;
+    guard.angle = Math.atan2(gdy, gdx);
+
+    const nx = guard.x + Math.cos(guard.angle) * guard.speed;
+    const ny = guard.y + Math.sin(guard.angle) * guard.speed;
+
+    if (!collidesWithPillars(nx, ny, 20)) {
+      guard.x = nx;
+      guard.y = ny;
+    }
+
+    // Arrest Thief
+    for (const player of room.players) {
+      if (player.isBusted) continue;
+      const dist = Math.hypot(player.x - guard.x, player.y - guard.y);
+      if (dist < 28) {
+        player.isBusted = true;
+        player.bustedUntil = now + 3000;
+        player.hasLoot = false;
+        io.to(room.code).emit('sound', 'busted');
+
+        const carried = room.loots.find(l => l.carriedBy === player.id);
+        if (carried) {
+          carried.carriedBy = null;
+          carried.x = player.x;
+          carried.y = player.y;
+          io.to(room.code).emit('event_msg', { text: `🚨 ${player.name} was arrested by the Drone!` });
+        }
+
+        player.x = SPAWN_ZONE.x + (Math.random() * 60 - 30);
+        player.y = SPAWN_ZONE.y;
+        break;
+      }
+    }
   }
 
-  room.lastEvent = {
-    type: 'LOCKDOWN',
-    victimName: victim ? victim.name : 'Unknown',
-    text: `🚨 LOCKDOWN! Vault security trapped ${victim ? victim.name : 'the holder'}! Round earnings: $0!`
-  };
+  // 3. Update Players
+  for (const player of room.players) {
+    if (player.isBusted) {
+      if (now > player.bustedUntil) player.isBusted = false;
+      continue;
+    }
 
-  broadcastRoom(room);
+    if (player.isStunned) {
+      if (now > player.stunnedUntil) player.isStunned = false;
+      continue;
+    }
 
-  // Transition to round summary after 3.5 seconds
-  setTimeout(() => {
-    endRound(room);
-  }, 3500);
-}
+    // Check Banana Hazards on Floor
+    for (let i = room.bananas.length - 1; i >= 0; i--) {
+      const ban = room.bananas[i];
+      if (Math.hypot(player.x - ban.x, player.y - ban.y) < 24) {
+        // SLIP OUT!
+        room.bananas.splice(i, 1);
+        player.isStunned = true;
+        player.stunnedUntil = now + 1800; // 1.8s spin
+        player.isSpinning = true;
 
-function endRound(room) {
-  clearInterval(room.timer);
-  room.gameState = 'round_summary';
+        io.to(room.code).emit('sound', 'slip');
+        io.to(room.code).emit('event_msg', { text: `🍌 ${player.name} SLIPPED on a Banana peel and spun out!` });
 
-  // Check if match is finished
-  if (room.currentRound >= room.maxRounds) {
+        // Drop loot if holding
+        const carried = room.loots.find(l => l.carriedBy === player.id);
+        if (carried) {
+          carried.carriedBy = null;
+          player.hasLoot = false;
+          carried.x = Math.max(40, Math.min(MAP_W - 40, player.x + (Math.random() * 80 - 40)));
+          carried.y = Math.max(40, Math.min(MAP_H - 40, player.y + (Math.random() * 80 - 40)));
+        }
+        break;
+      }
+    }
+
+    // Rocket Boost check
+    const isRocketing = now < player.rocketUntil;
+    let speed = isRocketing ? 10.5 : (player.isDashing ? 6.5 : 3.8);
+
+    const carriedLoot = room.loots.find(l => l.carriedBy === player.id);
+    player.hasLoot = !!carriedLoot;
+    if (carriedLoot && carriedLoot.type === 'diamond' && !isRocketing) speed *= 0.82;
+
+    let nx = player.x + player.vx * speed;
+    let ny = player.y + player.vy * speed;
+
+    nx = Math.max(20, Math.min(MAP_W - 20, nx));
+    ny = Math.max(20, Math.min(MAP_H - 20, ny));
+
+    if (!collidesWithPillars(nx, player.y, 16)) player.x = nx;
+    if (!collidesWithPillars(player.x, ny, 16)) player.y = ny;
+
+    // Rocket Ramming into rivals!
+    if (isRocketing) {
+      for (const target of room.players) {
+        if (target.id === player.id || target.isBusted) continue;
+        if (Math.hypot(player.x - target.x, player.y - target.y) < 36) {
+          target.isStunned = true;
+          target.stunnedUntil = now + 1500;
+          io.to(room.code).emit('sound', 'tackle');
+          io.to(room.code).emit('event_msg', { text: `🚀 ${player.name} RAMMED into ${target.name} at supersonic speed!` });
+
+          const tLoot = room.loots.find(l => l.carriedBy === target.id);
+          if (tLoot) {
+            tLoot.carriedBy = null;
+            target.hasLoot = false;
+            tLoot.x = Math.max(40, Math.min(MAP_W - 40, target.x + Math.cos(player.angle) * 90));
+            tLoot.y = Math.max(40, Math.min(MAP_H - 40, target.y + Math.sin(player.angle) * 90));
+          }
+        }
+      }
+    }
+
+    // Mystery Item Box Pickups
+    if (!player.heldItem) {
+      for (const box of room.itemBoxes) {
+        if (now > box.respawnAt && Math.hypot(player.x - box.x, player.y - box.y) < 28) {
+          box.respawnAt = now + 10000; // 10s box respawn
+          player.heldItem = POWERUPS[Math.floor(Math.random() * POWERUPS.length)];
+          io.to(player.id).emit('got_item', { item: player.heldItem });
+          io.to(room.code).emit('sound', 'pickup');
+          break;
+        }
+      }
+    }
+
+    // Normal Loot Pickups
+    if (!carriedLoot) {
+      for (const loot of room.loots) {
+        if (!loot.carriedBy && now > loot.respawnAt) {
+          if (Math.hypot(player.x - loot.x, player.y - loot.y) < 32) {
+            loot.carriedBy = player.id;
+            player.hasLoot = true;
+            io.to(room.code).emit('sound', 'pickup');
+            io.to(room.code).emit('event_msg', { text: `💎 ${player.name} snatched the ${loot.name}!` });
+            break;
+          }
+        }
+      }
+    } else {
+      carriedLoot.x = player.x;
+      carriedLoot.y = player.y - 12;
+
+      // Escape at Van
+      if (player.x > ESCAPE_ZONE.x && player.x < ESCAPE_ZONE.x + ESCAPE_ZONE.w &&
+          player.y < ESCAPE_ZONE.y + ESCAPE_ZONE.h + 20) {
+        player.score += carriedLoot.value;
+        player.hasLoot = false;
+        io.to(room.code).emit('sound', 'cash_out');
+        io.to(room.code).emit('event_msg', { text: `💰 ${player.name} ESCAPED! Banked $${carriedLoot.value}!` });
+
+        carriedLoot.carriedBy = null;
+        carriedLoot.respawnAt = now + 7000;
+        carriedLoot.x = carriedLoot.type === 'diamond' ? 450 : (carriedLoot.id % 2 === 0 ? 140 : 760);
+        carriedLoot.y = carriedLoot.type === 'diamond' ? 365 : (carriedLoot.id < 4 ? 120 : 460);
+      }
+    }
+  }
+
+  // 4. Broadcast 30FPS World State
+  const rankedPlayers = [...room.players].sort((a, b) => b.score - a.score);
+
+  io.to(room.code).emit('world_state', {
+    players: room.players.map(p => ({
+      id: p.id,
+      name: p.name,
+      avatar: p.avatar,
+      x: Math.round(p.x),
+      y: Math.round(p.y),
+      angle: p.angle,
+      score: p.score,
+      isBusted: p.isBusted,
+      isStunned: p.isStunned,
+      hasLoot: p.hasLoot,
+      isRocketing: now < p.rocketUntil,
+      heldItem: p.heldItem
+    })),
+    leaderboard: rankedPlayers.map(p => ({ name: p.name, avatar: p.avatar, score: p.score })),
+    guards: room.guards.map(g => ({
+      id: g.id,
+      x: Math.round(g.x),
+      y: Math.round(g.y),
+      angle: g.angle,
+      state: g.state
+    })),
+    loots: room.loots.map(l => ({
+      id: l.id,
+      type: l.type,
+      name: l.name,
+      icon: l.icon,
+      x: Math.round(l.x),
+      y: Math.round(l.y),
+      isCarried: !!l.carriedBy,
+      isAvailable: now > l.respawnAt
+    })),
+    itemBoxes: room.itemBoxes.map(b => ({
+      id: b.id,
+      x: Math.round(b.x),
+      y: Math.round(b.y),
+      isAvailable: now > b.respawnAt
+    })),
+    bananas: room.bananas.map(b => ({ id: b.id, x: Math.round(b.x), y: Math.round(b.y) })),
+    smokes: room.smokes.map(s => ({ id: s.id, x: Math.round(s.x), y: Math.round(s.y), radius: s.radius })),
+    timeLeft: Math.max(0, Math.ceil((room.endTime - now) / 1000))
+  });
+
+  if (now >= room.endTime) {
+    clearInterval(room.gameLoop);
     room.gameState = 'game_over';
-    room.lastEvent = { type: 'GAME_OVER', text: '🏆 HEIST COMPLETED! Check out the final scores!' };
-  } else {
-    room.lastEvent = { type: 'ROUND_ENDED', text: `Round ${room.currentRound} finished. Get ready for the next vault!` };
+    io.to(room.code).emit('game_over', { players: rankedPlayers, winner: rankedPlayers[0] });
   }
-
-  broadcastRoom(room);
 }
 
-// Socket IO Event Handling
-io.on('connection', (socket) => {
-  console.log(`[Connect] Socket connected: ${socket.id}`);
+function startGame(room) {
+  room.gameState = 'active';
+  room.startTime = Date.now();
+  room.endTime = Date.now() + 1000 * 90;
+  room.lastSirenTime = 0;
+  room.megaLootSpawned = false;
+  room.loots = createLoots();
+  room.itemBoxes = createItemBoxes();
+  room.guards = createGuards();
+  room.bananas = [];
+  room.smokes = [];
 
-  // Create room
+  room.players.forEach((p, idx) => {
+    p.x = SPAWN_ZONE.x + (idx * 40 - (room.players.length * 20));
+    p.y = SPAWN_ZONE.y;
+    p.vx = 0;
+    p.vy = 0;
+    p.angle = -Math.PI / 2;
+    p.score = 0;
+    p.isBusted = false;
+    p.isStunned = false;
+    p.hasLoot = false;
+    p.heldItem = null;
+    p.rocketUntil = 0;
+    p.isDashing = false;
+  });
+
+  io.to(room.code).emit('game_started', {
+    map: { width: MAP_W, height: MAP_H, pillars: PILLARS, escapeZone: ESCAPE_ZONE }
+  });
+
+  if (room.gameLoop) clearInterval(room.gameLoop);
+  room.gameLoop = setInterval(() => updateGame(room), 33);
+}
+
+io.on('connection', (socket) => {
   socket.on('create_room', ({ playerName, avatar }) => {
     const code = generateRoomCode();
     const room = {
       code,
       hostId: socket.id,
       gameState: 'lobby',
-      currentRound: 1,
-      maxRounds: 5,
-      loot: LOOT_CATALOG[0],
-      currentHolderId: null,
-      currentValue: 100,
-      dangerLevel: 0,
-      elapsedSeconds: 0,
-      secretAlarmLimit: 20,
-      timer: null,
-      lastEvent: { type: 'CREATED', text: `Vault room ${code} created.` },
-      players: [
-        {
-          id: socket.id,
-          name: playerName.trim().substring(0, 15) || 'Master Thief',
-          avatar: avatar || '🦊',
-          score: 0,
-          roundScore: 0,
-          status: 'spectating'
-        }
-      ]
+      players: [{
+        id: socket.id,
+        name: (playerName || 'Master Thief').trim().slice(0, 14),
+        avatar: avatar || '🦊',
+        score: 0,
+        x: SPAWN_ZONE.x,
+        y: SPAWN_ZONE.y,
+        vx: 0,
+        vy: 0,
+        angle: 0,
+        isBusted: false,
+        isStunned: false,
+        hasLoot: false,
+        heldItem: null,
+        rocketUntil: 0,
+        isDashing: false
+      }],
+      loots: createLoots(),
+      itemBoxes: createItemBoxes(),
+      guards: createGuards(),
+      bananas: [],
+      smokes: [],
+      gameLoop: null
     };
 
     rooms.set(code, room);
     socket.join(code);
     socket.roomCode = code;
 
-    socket.emit('room_created', { code });
-    broadcastRoom(room);
+    socket.emit('room_created', { code, isHost: true });
+    io.to(code).emit('lobby_update', { code, players: room.players, hostId: room.hostId });
   });
 
-  // Join room
   socket.on('join_room', ({ code, playerName, avatar }) => {
-    const formattedCode = (code || '').toUpperCase().trim();
-    const room = rooms.get(formattedCode);
-
+    const formatted = (code || '').toUpperCase().trim();
+    const room = rooms.get(formatted);
     if (!room) {
-      socket.emit('error_message', 'Room code not found. Please check and try again.');
+      socket.emit('error_msg', 'Room code not found!');
       return;
     }
 
-    if (room.players.length >= 12) {
-      socket.emit('error_message', 'Room is currently full (maximum 12 players).');
-      return;
-    }
-
-    const newPlayer = {
+    const player = {
       id: socket.id,
-      name: (playerName || '').trim().substring(0, 15) || `Thief #${room.players.length + 1}`,
-      avatar: avatar || AVATARS[room.players.length % AVATARS.length],
+      name: (playerName || `Rival #${room.players.length + 1}`).trim().slice(0, 14),
+      avatar: avatar || '🐺',
       score: 0,
-      roundScore: 0,
-      status: 'spectating'
+      x: SPAWN_ZONE.x,
+      y: SPAWN_ZONE.y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      isBusted: false,
+      isStunned: false,
+      hasLoot: false,
+      heldItem: null,
+      rocketUntil: 0,
+      isDashing: false
     };
 
-    room.players.push(newPlayer);
-    socket.join(formattedCode);
-    socket.roomCode = formattedCode;
+    room.players.push(player);
+    socket.join(formatted);
+    socket.roomCode = formatted;
 
-    room.lastEvent = { type: 'PLAYER_JOINED', text: `${newPlayer.name} infiltrated the room!` };
-
-    socket.emit('room_joined', { code: formattedCode });
-    broadcastRoom(room);
+    socket.emit('room_joined', { code: formatted, isHost: false });
+    io.to(formatted).emit('lobby_update', { code: formatted, players: room.players, hostId: room.hostId });
   });
 
-  // Add Bot Thief (For solo testing and practice!)
-  socket.on('add_bot', () => {
-    const room = rooms.get(socket.roomCode);
-    if (!room || room.hostId !== socket.id) return;
-    if (room.players.length >= 12) return;
-
-    const botNames = ['Cyber Shadow', 'Neon Fox', 'Glitch Rogue', 'Data Hound', 'Lucky Bandit'];
-    const botAvatars = ['🤖', '🦾', '👾', '🕶️', '⚡'];
-    const botIndex = room.players.filter(p => p.isBot).length;
-
-    const botId = 'bot_' + Math.random().toString(36).substring(2, 8);
-    const botPlayer = {
-      id: botId,
-      name: `${botNames[botIndex % botNames.length]}`,
-      avatar: botAvatars[botIndex % botAvatars.length],
-      score: 0,
-      roundScore: 0,
-      status: 'spectating',
-      isBot: true
-    };
-
-    room.players.push(botPlayer);
-    room.lastEvent = { type: 'BOT_ADDED', text: `${botPlayer.name} joined as AI crew!` };
-    broadcastRoom(room);
-  });
-
-  // Start game (host only)
   socket.on('start_game', () => {
     const room = rooms.get(socket.roomCode);
     if (!room || room.hostId !== socket.id) return;
-
-    if (room.players.length < 2) {
-      socket.emit('error_message', 'You need at least 2 players to start the heist!');
-      return;
-    }
-
-    room.currentRound = 1;
-    room.players.forEach(p => {
-      p.score = 0;
-      p.roundScore = 0;
-    });
-
-    startRound(room);
+    startGame(room);
   });
 
-  // Next round (host only)
-  socket.on('next_round', () => {
+  socket.on('return_to_lobby', () => {
     const room = rooms.get(socket.roomCode);
-    if (!room || room.hostId !== socket.id) return;
-
-    if (room.currentRound < room.maxRounds) {
-      room.currentRound++;
-      startRound(room);
-    }
+    if (!room) return;
+    if (room.gameLoop) clearInterval(room.gameLoop);
+    room.gameState = 'lobby';
+    io.to(room.code).emit('go_to_lobby');
+    io.to(room.code).emit('lobby_update', { code: room.code, players: room.players, hostId: room.hostId });
   });
 
-  // Restart full match (host only)
-  socket.on('restart_game', () => {
-    const room = rooms.get(socket.roomCode);
-    if (!room || room.hostId !== socket.id) return;
-
-    room.currentRound = 1;
-    room.players.forEach(p => {
-      p.score = 0;
-      p.roundScore = 0;
-      p.status = 'spectating';
-    });
-
-    startRound(room);
-  });
-
-  // Cash out action (holder banks money)
-  socket.on('cash_out', () => {
+  socket.on('player_move', ({ vx, vy, isDashing }) => {
     const room = rooms.get(socket.roomCode);
     if (!room || room.gameState !== 'active') return;
-    if (room.currentHolderId !== socket.id) return;
 
-    const holder = room.players.find(p => p.id === socket.id);
-    if (!holder) return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player) return;
 
-    const bankedAmount = room.currentValue;
-    holder.score += bankedAmount;
-    holder.roundScore = bankedAmount;
-    holder.status = 'safe';
+    player.vx = vx;
+    player.vy = vy;
+    player.isDashing = isDashing;
+    if (vx !== 0 || vy !== 0) player.angle = Math.atan2(vy, vx);
+  });
 
-    room.lastEvent = {
-      type: 'CASH_OUT',
-      text: `💰 ${holder.name} CASHED OUT with $${bankedAmount.toLocaleString()}!`
-    };
+  // 🎯 USE POWER-UP ITEM!
+  socket.on('use_powerup', () => {
+    const room = rooms.get(socket.roomCode);
+    if (!room || room.gameState !== 'active') return;
 
-    io.to(room.code).emit('sound_effect', { type: 'cash_out', player: holder.name, amount: bankedAmount });
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || !player.heldItem) return;
 
-    // Check remaining active players who haven't cashed out
-    const remainingPlayers = room.players.filter(p => p.status === 'spectating');
+    const item = player.heldItem;
+    player.heldItem = null; // consume item
+    socket.emit('item_used');
 
-    if (remainingPlayers.length === 0) {
-      // Everyone cashed out! Round ends in victory!
-      clearInterval(room.timer);
-      room.gameState = 'safe_end';
-      broadcastRoom(room);
-      setTimeout(() => endRound(room), 2500);
-    } else {
-      // Pass loot to one of the remaining players, keep adrenaline rolling!
-      const nextHolder = remainingPlayers[Math.floor(Math.random() * remainingPlayers.length)];
-      room.currentHolderId = nextHolder.id;
-      nextHolder.status = 'holding';
-      // Give a tiny safety buffer on fuse
-      room.secretAlarmLimit += 4;
-      broadcastRoom(room);
+    if (item === 'banana') {
+      // Drop banana 30px behind player
+      const bx = player.x - Math.cos(player.angle) * 32;
+      const by = player.y - Math.sin(player.angle) * 32;
+      room.bananas.push({ id: Date.now() + Math.random(), x: bx, y: by, placedBy: player.name });
+      io.to(room.code).emit('sound', 'whoosh');
+      io.to(room.code).emit('event_msg', { text: `🍌 ${player.name} dropped a BANANA peel!` });
+    } else if (item === 'rocket') {
+      player.rocketUntil = Date.now() + 2200; // 2.2s rocket boost
+      io.to(room.code).emit('sound', 'whoosh');
+      io.to(room.code).emit('event_msg', { text: `🚀 ${player.name} ACTIVATED ROCKET BOOST!` });
+    } else if (item === 'smoke') {
+      room.smokes.push({ id: Date.now(), x: player.x, y: player.y, radius: 120, expiresAt: Date.now() + 5000 });
+      io.to(room.code).emit('sound', 'whoosh');
+      io.to(room.code).emit('event_msg', { text: `💨 ${player.name} deployed a SMOKE BOMB!` });
+    } else if (item === 'magnet') {
+      // Pull nearest loose loot or steal from closest player within 220px
+      let nearest = null;
+      let minDist = 220;
+      for (const l of room.loots) {
+        const d = Math.hypot(player.x - l.x, player.y - l.y);
+        if (d < minDist) {
+          minDist = d;
+          nearest = l;
+        }
+      }
+      if (nearest) {
+        if (nearest.carriedBy) {
+          const victim = room.players.find(p => p.id === nearest.carriedBy);
+          if (victim) victim.hasLoot = false;
+        }
+        nearest.carriedBy = player.id;
+        player.hasLoot = true;
+        io.to(room.code).emit('sound', 'pickup');
+        io.to(room.code).emit('event_msg', { text: `🧲 ${player.name} USED A LOOT MAGNET and snatched the ${nearest.name}!` });
+      }
     }
   });
 
-  // Pass loot to another player (Hot Potato throw!)
-  socket.on('pass_loot', ({ targetId }) => {
-    const room = rooms.get(socket.roomCode);
-    if (!room || room.gameState !== 'active') return;
-    if (room.currentHolderId !== socket.id) return;
-
-    const currentHolder = room.players.find(p => p.id === socket.id);
-    if (!currentHolder) return;
-
-    // Eligible recipients: other players in room who haven't cashed out yet
-    const eligiblePlayers = room.players.filter(p => p.id !== socket.id && p.status !== 'safe');
-    if (eligiblePlayers.length === 0) return;
-
-    let targetPlayer = eligiblePlayers.find(p => p.id === targetId);
-    if (!targetPlayer) {
-      targetPlayer = eligiblePlayers[Math.floor(Math.random() * eligiblePlayers.length)];
-    }
-
-    currentHolder.status = 'spectating';
-    // Passing bonus reward: +$150 guaranteed for passing successfully
-    currentHolder.score += 150;
-
-    targetPlayer.status = 'holding';
-    room.currentHolderId = targetPlayer.id;
-
-    room.lastEvent = {
-      type: 'PASS',
-      text: `💣 ${currentHolder.name} flung the loot to ${targetPlayer.name}!`
-    };
-
-    io.to(room.code).emit('sound_effect', { type: 'whoosh', from: currentHolder.name, to: targetPlayer.name });
-    broadcastRoom(room);
-  });
-
-  // Sabotage / Hack Alarm (Spectators tap to increase danger on the holder!)
-  socket.on('sabotage_alarm', () => {
-    const room = rooms.get(socket.roomCode);
-    if (!room || room.gameState !== 'active') return;
-    // Holder cannot sabotage themselves
-    if (room.currentHolderId === socket.id) return;
-
-    const hacker = room.players.find(p => p.id === socket.id);
-    if (!hacker) return;
-
-    // Each sabotage tap reduces alarm limit by 0.3s (increasing danger)
-    room.secretAlarmLimit = Math.max(room.elapsedSeconds + 1.2, room.secretAlarmLimit - 0.35);
-
-    io.to(room.code).emit('sound_effect', { type: 'glitch', hacker: hacker.name });
-    io.to(room.code).emit('sabotage_pulse', { hackerName: hacker.name });
-  });
-
-  // Snatch attempt (Spectators try to steal the bag!)
-  socket.on('snatch_loot', () => {
-    const room = rooms.get(socket.roomCode);
-    if (!room || room.gameState !== 'active') return;
-    if (room.currentHolderId === socket.id) return;
-
-    const thief = room.players.find(p => p.id === socket.id);
-    const oldHolder = room.players.find(p => p.id === room.currentHolderId);
-    if (!thief || !oldHolder) return;
-
-    // 40% success rate on snatch
-    if (Math.random() < 0.4) {
-      oldHolder.status = 'spectating';
-      thief.status = 'holding';
-      room.currentHolderId = thief.id;
-
-      room.lastEvent = {
-        type: 'SNATCH_SUCCESS',
-        text: `🧲 YOINK! ${thief.name} SNATCHED the loot right out of ${oldHolder.name}'s hands!`
-      };
-      io.to(room.code).emit('sound_effect', { type: 'snatch' });
-      broadcastRoom(room);
-    } else {
-      socket.emit('snatch_failed', 'Snatch failed! The holder held on tight!');
-    }
-  });
-
-  // Handle disconnect
   socket.on('disconnect', () => {
-    console.log(`[Disconnect] Socket disconnected: ${socket.id}`);
     const room = rooms.get(socket.roomCode);
     if (!room) return;
 
-    const index = room.players.findIndex(p => p.id === socket.id);
-    if (index !== -1) {
-      const removed = room.players.splice(index, 1)[0];
-      room.lastEvent = { type: 'PLAYER_LEFT', text: `${removed.name} slipped into the shadows.` };
-
-      // If room empty, clean up
+    const idx = room.players.findIndex(p => p.id === socket.id);
+    if (idx !== -1) {
+      room.players.splice(idx, 1);
       if (room.players.length === 0) {
-        if (room.timer) clearInterval(room.timer);
+        if (room.gameLoop) clearInterval(room.gameLoop);
         rooms.delete(room.code);
-        return;
+      } else {
+        if (room.hostId === socket.id) room.hostId = room.players[0].id;
+        io.to(room.code).emit('lobby_update', { code: room.code, players: room.players, hostId: room.hostId });
       }
-
-      // If host left, elect new host
-      if (room.hostId === socket.id) {
-        room.hostId = room.players[0].id;
-      }
-
-      // If holder left during active game, transfer loot to next player
-      if (room.currentHolderId === socket.id && room.gameState === 'active') {
-        const remaining = room.players.filter(p => p.status !== 'safe');
-        if (remaining.length > 0) {
-          const nextHolder = remaining[0];
-          room.currentHolderId = nextHolder.id;
-          nextHolder.status = 'holding';
-        } else {
-          endRound(room);
-        }
-      }
-
-      broadcastRoom(room);
     }
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`===============================================`);
-  console.log(`🚀 GREED VAULT SERVER RUNNING ON PORT ${PORT}`);
-  console.log(`👉 Local: http://localhost:${PORT}`);
-  console.log(`===============================================`);
+  console.log(`=======================================================`);
+  console.log(`🍌 MARIO-KART HEIST MAYHEM RUNNING ON PORT ${PORT}`);
+  console.log(`👉 http://localhost:${PORT}`);
+  console.log(`=======================================================`);
 });
