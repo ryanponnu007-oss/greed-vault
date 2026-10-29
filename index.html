@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>💎 VAULT RAIDERS - 2D Multiplayer Heist</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      background-color: #030712;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #030712;
+    }
+    canvas {
+      image-rendering: pixelated;
+      box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+      border: 2px solid #1e293b;
+      border-radius: 12px;
+    }
+  </style>
+</head>
+<body class="text-slate-100 flex flex-col justify-center items-center w-screen h-screen">
+
+  <!-- ========================================== -->
+  <!-- SCREEN 1: WELCOME & HOW TO PLAY            -->
+  <!-- ========================================== -->
+  <div id="screen-welcome" class="w-full max-w-md mx-auto px-5 py-6 flex flex-col items-center gap-5 text-center z-50">
+    <div class="space-y-1">
+      <div class="inline-block p-4 bg-amber-500/10 border-2 border-amber-400/40 rounded-3xl mb-1 shadow-2xl shadow-amber-500/20">
+        <span class="text-5xl">💎</span>
+      </div>
+      <h1 class="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 tracking-tight">
+        VAULT RAIDERS
+      </h1>
+      <p class="text-xs text-slate-400">Real-Time Top-Down Multiplayer Heist</p>
+    </div>
+
+    <!-- 3-Step Visual How to Play Card -->
+    <div class="w-full bg-slate-900/90 border border-slate-800 p-3.5 rounded-2xl shadow-xl text-left space-y-2.5">
+      <h3 class="text-[11px] font-black uppercase tracking-wider text-amber-400">⚡ HOW TO PLAY (CHAOS RULES)</h3>
+      <div class="grid grid-cols-3 gap-2 text-center text-[11px]">
+        <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80">
+          <span class="text-2xl block mb-1">🕹️</span>
+          <span class="font-bold text-slate-200">1. Steer</span>
+          <p class="text-[9px] text-slate-400 mt-0.5">Joystick on phone or WASD</p>
+        </div>
+        <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80">
+          <span class="text-2xl block mb-1">📦</span>
+          <span class="font-bold text-slate-200">2. Power-Ups</span>
+          <p class="text-[9px] text-slate-400 mt-0.5">🍌 Banana • 🚀 Rocket • 🧲 Magnet</p>
+        </div>
+        <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80">
+          <span class="text-2xl block mb-1">🚐</span>
+          <span class="font-bold text-slate-200">3. Escape</span>
+          <p class="text-[9px] text-slate-400 mt-0.5">Bank loot at Getaway Van!</p>
+        </div>
+      </div>
+      <p class="text-[10px] text-amber-400 italic font-medium text-center">
+        💡 Tap [ITEM] on phone or [E] on laptop to drop bananas or fire rockets at your rivals!
+      </p>
+    </div>
+
+    <!-- Recommended Players Pro-Tip Banner -->
+    <div class="w-full bg-amber-500/10 border border-amber-500/30 px-3.5 py-2.5 rounded-2xl text-center">
+      <p class="text-xs text-amber-300 font-bold">
+        🔥 <span class="underline">PRO TIP:</span> Best with 3 to 4+ players! 1 or 2 is good for practice, but 3 or 4 unlocks maximum chaos, banana slips, and tackle battles!
+      </p>
+    </div>
+
+    <!-- Player Profile -->
+    <div class="w-full bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-3">
+      <div>
+        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider text-left mb-1.5">Your Thief Codename</label>
+        <input id="player-name-input" type="text" maxlength="14" placeholder="e.g. Sly Fox"
+          class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-white font-bold text-center focus:outline-none focus:border-amber-400">
+      </div>
+
+      <div>
+        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider text-left mb-1.5">Pick Avatar</label>
+        <div class="flex justify-center gap-2 text-2xl">
+          <button class="avatar-opt p-2 rounded-xl bg-amber-500/25 border-2 border-amber-400" data-avatar="🦊">🦊</button>
+          <button class="avatar-opt p-2 rounded-xl bg-slate-800 border border-slate-700" data-avatar="🐺">🐺</button>
+          <button class="avatar-opt p-2 rounded-xl bg-slate-800 border border-slate-700" data-avatar="🐱">🐱</button>
+          <button class="avatar-opt p-2 rounded-xl bg-slate-800 border border-slate-700" data-avatar="🤖">🤖</button>
+          <button class="avatar-opt p-2 rounded-xl bg-slate-800 border border-slate-700" data-avatar="🦝">🦝</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="w-full space-y-2.5">
+      <button id="btn-create-room" class="w-full py-4 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 text-slate-950 font-black rounded-2xl text-lg shadow-lg shadow-amber-500/20 active:scale-95 transition">
+        👑 CREATE HEIST ROOM
+      </button>
+
+      <div class="flex gap-2">
+        <input id="room-code-input" type="text" maxlength="4" placeholder="CODE" uppercase
+          class="w-1/2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-amber-400 font-mono font-black text-center text-lg uppercase focus:outline-none">
+        <button id="btn-join-room" class="w-1/2 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 font-bold rounded-xl text-slate-200 active:scale-95 transition">
+          JOIN ROOM 🚪
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ========================================== -->
+  <!-- SCREEN 2: ROOM LOBBY                       -->
+  <!-- ========================================== -->
+  <div id="screen-lobby" class="w-full max-w-md mx-auto px-5 py-6 hidden flex-col items-center gap-5 text-center z-50">
+    <div class="space-y-1">
+      <span class="text-xs uppercase font-bold text-slate-400 tracking-widest">Share Room Code with Friends</span>
+      <div class="flex items-center justify-center gap-2">
+        <div id="room-code-display" class="text-5xl font-black font-mono text-amber-400 tracking-widest bg-slate-900 border-2 border-amber-400/40 px-6 py-2 rounded-2xl shadow-xl">
+          ABCD
+        </div>
+        <button id="btn-copy-code" class="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-slate-300" title="Copy Code">
+          📋
+        </button>
+      </div>
+      <p class="text-[11px] text-slate-400 mt-1">Friends join on their phones or laptops!</p>
+    </div>
+
+    <!-- Crew Grid -->
+    <div class="w-full bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-2">
+      <div class="flex justify-between items-center text-xs font-bold text-slate-400 uppercase">
+        <span>Infiltrators (<span id="lobby-players-count">1</span>/8)</span>
+        <span class="text-emerald-400 font-mono">Ready</span>
+      </div>
+      <div id="lobby-players-grid" class="space-y-2">
+        <!-- Rendered Players -->
+      </div>
+    </div>
+
+    <!-- Recommended Players Tip in Lobby -->
+    <div class="w-full bg-amber-500/10 border border-amber-500/30 px-3.5 py-2.5 rounded-2xl text-center">
+      <p class="text-xs text-amber-300 font-bold">
+        👥 <span class="underline">PRO TIP:</span> 3 or 4+ players make the game 10x more fun! Share your room code with friends before hitting start!
+      </p>
+    </div>
+
+    <div class="w-full">
+      <button id="btn-start-game" class="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-2xl text-lg shadow-lg shadow-emerald-500/25 active:scale-95 transition">
+        🚀 INFILTRATE VAULT (START)
+      </button>
+    </div>
+  </div>
+
+
+  <!-- ========================================== -->
+  <!-- SCREEN 3: 2D TOP-DOWN GAMEPLAY CANVAS      -->
+  <!-- ========================================== -->
+  <div id="screen-game" class="w-full h-full relative hidden flex-row overflow-hidden">
+    
+    <!-- LEFT / MAIN GAME AREA (75% on Desktop, 100% on Mobile) -->
+    <div class="flex-1 h-full relative flex flex-col justify-between overflow-hidden">
+
+      <!-- Top HUD Bar -->
+      <div class="absolute top-3 left-3 right-3 z-40 flex flex-col gap-1.5 pointer-events-none">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2 bg-slate-950/85 border border-slate-800 px-3 py-1.5 rounded-xl backdrop-blur">
+            <span class="text-amber-400 font-bold text-xs uppercase font-mono">TIME:</span>
+            <span id="hud-timer" class="font-black font-mono text-white text-sm">90s</span>
+          </div>
+
+          <div id="hud-banner" class="text-xs font-bold text-amber-300 tracking-wide truncate max-w-[180px] sm:max-w-xs">
+            Race your rivals to grab the diamonds!
+          </div>
+
+          <div class="flex items-center gap-2 bg-slate-950/85 border border-slate-800 px-3 py-1.5 rounded-xl backdrop-blur">
+            <span class="text-emerald-400 font-bold text-xs uppercase font-mono">YOUR BANK:</span>
+            <span id="hud-score" class="font-black font-mono text-emerald-400 text-sm">$0</span>
+          </div>
+
+          <!-- Music & Mobile Rules Buttons -->
+          <div class="pointer-events-auto flex items-center gap-1.5">
+            <button id="btn-toggle-bgm" class="p-2 rounded-xl bg-slate-800/90 border border-slate-700 text-xs font-bold text-slate-300 hover:text-amber-400 transition" title="Toggle Synth Heist Music">
+              🎵
+            </button>
+            <button id="btn-toggle-rules-mobile" class="md:hidden p-2 rounded-xl bg-slate-800/90 border border-slate-700 text-xs font-bold text-amber-400 flex items-center gap-1">
+              <span>❓</span>
+              <span>Rules</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Live Player Rankings Bar -->
+        <div id="hud-rankings" class="flex justify-center gap-2 overflow-x-auto py-0.5">
+          <!-- Live rank pills -->
+        </div>
+      </div>
+
+      <!-- Canvas Container -->
+      <div id="canvas-container" class="w-full h-full flex items-center justify-center bg-slate-950">
+        <canvas id="game-canvas"></canvas>
+      </div>
+
+      <!-- TOUCH CONTROLS (PHONES & TABLETS) -->
+      <div id="touch-zone-left" class="absolute left-0 bottom-0 top-16 w-1/2 z-30 select-none">
+        <div id="joystick-base" class="hidden absolute w-24 h-24 rounded-full bg-slate-800/60 border-2 border-amber-400/40 pointer-events-none -translate-x-1/2 -translate-y-1/2">
+          <div id="joystick-knob" class="absolute top-1/2 left-1/2 w-12 h-12 rounded-full bg-gradient-to-tr from-amber-500 to-yellow-400 shadow-lg pointer-events-none"></div>
+        </div>
+      </div>
+
+      <!-- Right Touch Area: Action Buttons (Dash & Use Item) -->
+      <div class="absolute right-4 bottom-6 z-30 flex items-center gap-3 select-none">
+        <button id="btn-mobile-item" class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-500 border-2 border-purple-400/60 shadow-xl opacity-30 pointer-events-none flex flex-col items-center justify-center text-white font-black transition active:scale-90">
+          <span class="item-icon text-2xl leading-none">📦</span>
+          <span class="item-name text-[8px] uppercase tracking-wider font-extrabold mt-0.5">ITEM</span>
+        </button>
+
+        <button id="btn-mobile-action" class="w-20 h-20 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-400 active:scale-90 border-4 border-slate-950 shadow-2xl flex flex-col items-center justify-center text-slate-950 font-black transition">
+          <span class="text-2xl leading-none">👟</span>
+          <span class="text-[9px] uppercase tracking-wider font-extrabold mt-0.5">DASH</span>
+        </button>
+      </div>
+
+      <!-- Desktop Key hint (Laptop) -->
+      <div class="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 pointer-events-none hidden sm:block text-[10px] text-slate-400 font-mono bg-slate-950/80 px-3 py-1 rounded-full border border-slate-800">
+        [WASD / Arrows] Move • [Space] Dash • [E / F] Use Item (🍌 🚀 🧲 💨)
+      </div>
+
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- RIGHT SIDEBAR (25% WIDTH FROM TOP TO BOTTOM): INSTRUCTIONS -->
+    <!-- ======================================================= -->
+    <aside id="game-sidebar" class="hidden md:flex flex-col w-72 lg:w-80 h-full bg-slate-900/95 border-l border-slate-800/80 p-4 z-40 overflow-y-auto space-y-4 text-left shadow-2xl">
+      
+      <!-- Heist Header -->
+      <div class="border-b border-slate-800 pb-3 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-2xl">💎</span>
+          <div>
+            <h2 class="text-base font-black tracking-wide text-amber-400 uppercase">Vault Raiders</h2>
+            <p class="text-[10px] text-slate-400 font-mono">Mission Briefing & Rules</p>
+          </div>
+        </div>
+        <button id="btn-close-sidebar-mobile" class="md:hidden px-2 py-1 rounded-lg bg-slate-800 text-xs font-bold text-slate-300">
+          ✕
+        </button>
+      </div>
+
+      <!-- The Core Objective -->
+      <div class="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-1.5">
+        <h4 class="text-[11px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+          <span>🎯</span> The Heist Goal
+        </h4>
+        <p class="text-xs text-slate-300 leading-relaxed">
+          Race your rival thieves into the vault. Snatch the <strong class="text-amber-300 font-bold">Master Diamond ($1,000)</strong> or <strong class="text-amber-300 font-bold">Gold Ingots ($300)</strong>, and carry them to the <strong class="text-emerald-400">🚐 Getaway Van</strong> at the top to bank your cash!
+        </p>
+      </div>
+
+      <!-- Recommended Players Tip in Sidebar -->
+      <div class="bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl space-y-1">
+        <h4 class="text-[11px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1">
+          <span>👥</span> Recommended Crew Size
+        </h4>
+        <p class="text-[11px] text-amber-200/90 leading-relaxed font-medium">
+          <strong>Best with 3 or 4+ players!</strong> 1 or 2 players is good to practice, but 3 or 4 players unleashes hilarious tackle fights, banana slips, and rocket chases!
+        </p>
+      </div>
+
+      <!-- Controls Guide -->
+      <div class="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-2">
+        <h4 class="text-[11px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1">
+          <span>🕹️</span> Controls
+        </h4>
+        <div class="space-y-1.5 text-xs text-slate-300">
+          <div class="flex items-center justify-between">
+            <span class="text-slate-400 font-mono text-[11px]">Move Thief:</span>
+            <span class="bg-slate-800 px-2 py-0.5 rounded text-[11px] font-mono text-amber-300">WASD / Arrows</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-400 font-mono text-[11px]">Sprint / Tackle:</span>
+            <span class="bg-slate-800 px-2 py-0.5 rounded text-[11px] font-mono text-emerald-400">Spacebar</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-400 font-mono text-[11px]">Use Power-Up:</span>
+            <span class="bg-slate-800 px-2 py-0.5 rounded text-[11px] font-mono text-purple-300">E or F</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-400 font-mono text-[11px]">On Mobile:</span>
+            <span class="bg-slate-800 px-2 py-0.5 rounded text-[11px] font-mono text-sky-300">Touch Joystick</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Power-Ups Breakdown -->
+      <div class="bg-slate-950/80 border border-slate-800 p-3 rounded-xl space-y-2">
+        <h4 class="text-[11px] font-black uppercase tracking-wider text-purple-400 flex items-center gap-1">
+          <span>📦</span> Mystery Power-Ups
+        </h4>
+        <div class="space-y-2 text-xs">
+          <div class="flex items-start gap-2">
+            <span class="text-lg">🍌</span>
+            <div>
+              <strong class="text-yellow-300 block text-[11px]">Banana Peel</strong>
+              <p class="text-[11px] text-slate-400">Drop behind you. Rivals slip, spin 360°, and drop their loot!</p>
+            </div>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="text-lg">🚀</span>
+            <div>
+              <strong class="text-rose-400 block text-[11px]">Rocket Boost</strong>
+              <p class="text-[11px] text-slate-400">3x supersonic speed! Ram opponents into walls to stun them.</p>
+            </div>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="text-lg">🧲</span>
+            <div>
+              <strong class="text-sky-300 block text-[11px]">Loot Magnet</strong>
+              <p class="text-[11px] text-slate-400">Pulls the diamond directly into your hands from afar.</p>
+            </div>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="text-lg">💨</span>
+            <div>
+              <strong class="text-slate-300 block text-[11px]">Smoke Bomb</strong>
+              <p class="text-[11px] text-slate-400">Blinds security guard drones so you can sneak past safely.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Security Warning -->
+      <div class="bg-rose-950/30 border border-rose-900/50 p-3 rounded-xl space-y-1">
+        <h4 class="text-[11px] font-black uppercase tracking-wider text-rose-400 flex items-center gap-1">
+          <span>⚠️</span> Security Threat
+        </h4>
+        <p class="text-[11px] text-rose-200/80 leading-relaxed">
+          Guards patrol with sweeping flashlight cones. If you touch the light: <strong>SIRENS WAIL</strong>! If the guard catches you, you drop all your loot and get sent back to spawn!
+        </p>
+      </div>
+
+      <!-- Quick Room Info Footer -->
+      <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono text-slate-500">
+        <span>ROOM: <strong id="sidebar-room-code" class="text-amber-400">ABCD</strong></span>
+        <span>90S RAPID HEIST</span>
+      </div>
+
+    </aside>
+
+  </div>
+
+
+  <!-- ========================================== -->
+  <!-- SCREEN 4: GAME OVER & PODIUM               -->
+  <!-- ========================================== -->
+  <div id="screen-gameover" class="w-full max-w-md mx-auto px-5 py-6 hidden flex-col items-center gap-5 text-center z-50">
+    <div class="p-4 bg-amber-500/10 border-2 border-amber-400 text-6xl rounded-3xl shadow-2xl animate-bounce">
+      🏆
+    </div>
+    <div class="space-y-1">
+      <h2 class="text-3xl font-black text-amber-400 uppercase tracking-tight">HEIST COMPLETE!</h2>
+      <p class="text-xs text-slate-400">The vault is closed. Check out the Kingpin rankings!</p>
+    </div>
+
+    <div id="gameover-podium" class="w-full space-y-2.5">
+      <!-- Rendered Top Players -->
+    </div>
+
+    <div class="w-full space-y-2.5">
+      <button id="btn-play-again" class="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-2xl text-lg shadow-lg active:scale-95 transition">
+        🔄 PLAY AGAIN (QUICK REMATCH)
+      </button>
+
+      <button id="btn-back-lobby" class="w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-400 font-bold rounded-2xl text-sm active:scale-95 transition">
+        👥 BACK TO LOBBY (INVITE MORE FRIENDS)
+      </button>
+
+      <button id="btn-main-menu" class="w-full py-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 font-bold rounded-2xl text-sm active:scale-95 transition">
+        🏠 MAIN MENU (ENTER NEW CODE)
+      </button>
+    </div>
+  </div>
+
+  <script src="/game.js"></script>
+</body>
+</html>
